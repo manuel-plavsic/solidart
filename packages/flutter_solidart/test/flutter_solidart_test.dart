@@ -64,7 +64,7 @@ void main() {
       return Future.delayed(const Duration(milliseconds: 50), () => s.value);
     }
 
-    final r = createResource(fetcher: fetcher, source: s);
+    final r = createResource(fetcher, source: s);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -75,7 +75,7 @@ void main() {
                 ready: (data, refreshing) {
                   return Text('Data: $data refreshing: $refreshing');
                 },
-                error: (err, _) {
+                error: (err, _, refreshing) {
                   return const Text('Error');
                 },
                 loading: () {
@@ -116,7 +116,7 @@ void main() {
       return Future.delayed(const Duration(milliseconds: 150), () => s.value);
     }
 
-    final r = createResource(fetcher: fetcher, source: s);
+    final r = createResource(fetcher, source: s);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -127,7 +127,7 @@ void main() {
                 ready: (data, refreshing) {
                   return Text('Data: $data refreshing: $refreshing');
                 },
-                error: (err, _) {
+                error: (err, _, refreshing) {
                   return const Text('Error');
                 },
                 loading: () {
@@ -162,7 +162,7 @@ void main() {
       return Future.microtask(() => throw Exception());
     }
 
-    final r = createResource(fetcher: fetcher, source: s);
+    final r = createResource(fetcher, source: s);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -173,7 +173,7 @@ void main() {
                 ready: (data, refreshing) {
                   return Text('Data: $data refreshing: $refreshing');
                 },
-                error: (err, _) {
+                error: (err, _, refreshing) {
                   return const Text('Error');
                 },
                 loading: () {

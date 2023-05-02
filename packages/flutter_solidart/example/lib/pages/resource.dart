@@ -16,7 +16,7 @@ class _ResourcePageState extends State<ResourcePage> {
   @override
   void initState() {
     super.initState();
-    user = createResource(fetcher: fetchUser, source: userId);
+    user = createResource(fetchUser, source: userId);
   }
 
   @override
@@ -60,8 +60,9 @@ class _ResourcePageState extends State<ResourcePage> {
             const SizedBox(height: 16),
             ResourceBuilder(
               resource: user,
-              builder: (_, userValue) {
-                return userValue.on(
+              builder: (_, userResourceState) {
+                userResourceState.wrappedValue?.unwrap;
+                return userResourceState.on(
                   ready: (data, refreshing) {
                     return Column(
                       mainAxisSize: MainAxisSize.min,
@@ -77,7 +78,7 @@ class _ResourcePageState extends State<ResourcePage> {
                       ],
                     );
                   },
-                  error: (e, _) => Text(e.toString()),
+                  error: (e, _, refreshing) => Text(e.toString()),
                   loading: () {
                     return const RepaintBoundary(
                       child: CircularProgressIndicator(),

@@ -8,6 +8,7 @@ import 'package:solidart/src/core/read_signal.dart';
 import 'package:solidart/src/core/resource.dart';
 import 'package:solidart/src/core/signal.dart';
 import 'package:solidart/src/core/signal_options.dart';
+import 'package:solidart/src/core/stream_resource.dart';
 import 'package:test/test.dart';
 
 class MockCallbackFunction extends Mock {
@@ -326,19 +327,19 @@ void main() {
       final streamController = StreamController<int>();
       addTearDown(streamController.close);
 
-      final resource = createResource(stream: streamController.stream);
+      final resource = createStreamResource(streamController.stream);
       expect(resource.value, isA<ResourceUnresolved<int>>());
-      resource.resolve().ignore();
+      resource.resolve(forceLoadingState: false).ignore();
       expect(resource.value, isA<ResourceLoading<int>>());
       streamController.add(1);
       await pumpEventQueue();
       expect(resource.value, isA<ResourceReady<int>>());
-      expect(resource.value.value, 1);
+      expect(resource.value.wrappedValue?.unwrap, 1);
 
       streamController.add(10);
       await pumpEventQueue();
       expect(resource.value, isA<ResourceReady<int>>());
-      expect(resource.value(), 10);
+      expect(resource.value.wrappedValue?.unwrap, 10);
 
       streamController.addError(UnimplementedError());
       await pumpEventQueue();
@@ -348,7 +349,7 @@ void main() {
 
     test('check createResource with future that throws', () async {
       Future<User> getUser() => throw Exception();
-      final resource = createResource(fetcher: getUser);
+      final resource = createResource(getUser);
 
       addTearDown(resource.dispose);
 
@@ -366,17 +367,17 @@ void main() {
         return Future.value(User(id: userId.value));
       }
 
-      final resource = createResource(fetcher: getUser, source: userId);
+      final resource = createResource(getUser, source: userId);
 
       await resource.resolve();
       await pumpEventQueue();
       expect(resource.value, isA<ResourceReady<User>>());
-      expect(resource.value.value, const User(id: 0));
+      expect(resource.value.wrappedValue?.unwrap, const User(id: 0));
 
       userId.value = 1;
       await pumpEventQueue();
       expect(resource.value, isA<ResourceReady<User>>());
-      expect(resource.value(), const User(id: 1));
+      expect(resource.value.wrappedValue?.unwrap, const User(id: 1));
 
       userId.value = 2;
       await pumpEventQueue();
@@ -395,7 +396,7 @@ void main() {
 
       resource.value.on(
         ready: (data, refreshing) {},
-        error: (error, stack) {},
+        error: (error, stack, refreshing) {},
         loading: () {},
       );
 
@@ -415,7 +416,7 @@ void main() {
       var loadingCalledTimes = 0;
       var errorCalledTimes = 0;
       var refreshingTrueTimes = 0;
-      final resource = createResource(fetcher: fetcher);
+      final resource = createResource(fetcher);
 
       createEffect(
         () {
@@ -427,7 +428,7 @@ void main() {
                 dataCalledTimes++;
               }
             },
-            error: (error, stackTrace) {
+            error: (error, stackTrace, refreshing) {
               errorCalledTimes++;
             },
             loading: () {
@@ -463,7 +464,7 @@ void main() {
     });
 
     test('check toString()', () async {
-      final r = createResource(fetcher: () => Future.value(1));
+      final r = createResource(() => Future.value(1));
       await r.resolve();
       await pumpEventQueue();
       expect(
