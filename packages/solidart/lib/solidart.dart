@@ -9,4 +9,5 @@ export 'src/core/resource.dart';
 export 'src/core/signal.dart';
 export 'src/core/signal_base.dart' hide Listenable;
 export 'src/core/signal_options.dart';
+export 'src/core/stream_resource.dart';
 export 'src/extensions.dart';
