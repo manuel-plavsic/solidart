@@ -3,23 +3,29 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 import 'package:solidart/src/core/signal.dart';
 import 'package:solidart/src/core/signal_base.dart';
+import 'package:solidart/src/core/signal_options.dart';
+import 'package:solidart/src/utils.dart';
 
 /// {@macro resource}
-Resource<ResultType> createResource<ResultType>({
-  Future<ResultType> Function()? fetcher,
-  Stream<ResultType>? stream,
+Resource<T> createResource<T>(
+  Future<T> Function() fetcher, {
   SignalBase<dynamic>? source,
+  Wrapped<T> Function()? initialData,
+  bool lazy = true,
+  SignalOptions<ResourceValue<T>>? options,
 }) {
-  return Resource<ResultType>(
-    fetcher: fetcher,
+  return Resource<T>(
+    fetcher,
     source: source,
-    stream: stream,
+    initialData: initialData,
+    lazy: lazy,
+    options: options,
   );
 }
 
 /// {@template resource}
-/// `Resources` are special `Signal`s designed specifically to handle Async
-/// loading. Their purpose is wrap async values in a way that makes them easy
+/// `Resources` are special `Signal`s designed specifically to handle futures.
+/// Their purpose is wrap async values in a way that makes them easy
 /// to interact with handling the common states of a future __data__, __error__
 /// and __loading__.
 ///
@@ -49,14 +55,8 @@ Resource<ResultType> createResource<ResultType>({
 /// }
 ///
 /// // The resource (source is optional)
-/// final user = createResource(fetcher: fetchUser, source: userId);
+/// final user = createResource(fetchUser, source: userId);
 /// ```
-///
-/// A Resource can also be driven from a [stream] instead of a Future.
-/// In this case you just need to pass the `stream` field to the
-/// `createResource` method.
-/// The [source] field is ignored for the [stream] and used only for a
-/// [fetcher].
 ///
 /// If you are using the `flutter_solidart` library, check
 /// `ResourceBuilder` to learn how to react to the state of the resource in the
@@ -77,8 +77,10 @@ Resource<ResultType> createResource<ResultType>({
 /// - `isReady` indicates if the `Resource` is in the ready state
 /// - `isLoading` indicates if the `Resource` is in the loading state
 /// - `hasError` indicates if the `Resource` is in the error state
-/// - `asReady` upcast `ResourceValue` into a `ResourceReady`, or return null if the `ResourceValue` is in loading/error state
-/// - `asError` upcast `ResourceValue` into a `ResourceError`, or return null if the `ResourceValue` is in loading/ready state
+/// - `asReady` upcast `ResourceValue` into a `ResourceReady`, or return `null`
+///    if the `ResourceValue` is in loading/error state
+/// - `asError` upcast `ResourceValue` into a `ResourceError`, or return `null`
+///    if the `ResourceValue` is in loading/ready state
 /// - `value` attempts to synchronously get the value of `ResourceReady`
 /// - `error` attempts to synchronously get the error of `ResourceError`
 ///
@@ -88,129 +90,122 @@ Resource<ResultType> createResource<ResultType>({
 /// resource.
 /// If runs the `fetcher` for the first time and then it listen to the
 /// [source], if provided.
-/// If you're passing a [stream] it subscribes to it.
 ///
-/// The `refetch` method forces an update and calls the `fetcher` function
+/// The [refetch] method forces an update and calls the `fetcher` function
 /// again.
+///
+/// `initialData` can be provided. It needs to be wrapped in a [Wrapped] object,
+/// so that an initial value of `null` is also supported.
+/// See [Wrapped]'s docstring for more info.
+///
+/// Resources are by default lazy. You can make them be eagerly evaluated by
+/// passing `false` to the named param `lazy`.
 /// {@endtemplate}
-class Resource<ResultType> extends Signal<ResourceValue<ResultType>> {
+class Resource<T> extends Signal<ResourceValue<T>> {
   /// {@macro resource}
-  Resource({
-    this.fetcher,
-    this.stream,
+  Resource(
+    this.fetcher, {
     this.source,
+    Wrapped<T> Function()? initialData,
+    bool lazy = true,
     super.options,
-  })  : assert(
-          (fetcher != null) ^ (stream != null),
-          'Provide a fetcher or a stream',
-        ),
-        super(ResourceValue<ResultType>.unresolved());
+  })  : _initialData = initialData,
+        super(ResourceValue<T>.unresolved()) {
+    if (!lazy) {
+      resolve();
+    }
+  }
 
-  /// Reactive signal values passed to the fetcher, optional
-  /// Has no effect on a [stream].
+  /// The asynchronous function used to retrieve data.
+  final Future<T> Function() fetcher;
+
+  /// Reactive signal values passed to the fetcher, optional.
   final SignalBase<dynamic>? source;
 
-  /// The asynchrounous function used to retrieve data.
-  final Future<ResultType> Function()? fetcher;
+  final Wrapped<T> Function()? _initialData;
 
-  /// The stream used to retrieve data.
-  final Stream<ResultType>? stream;
-  StreamSubscription<ResultType>? _streamSubscription;
+  bool _resolved = false;
+
+  /// Whether or not the [resolve] method was already called.
+  bool get resolved => _resolved;
 
   /// Resolves the [Resource].
   ///
   /// If you provided a [fetcher], it run the async call and then it
   /// will subscribe to the [source], if provided.
-  /// Otherwise it starts listening to the [stream].
   ///
   /// This method must be called once during the life cycle of the resource.
-  Future<void> resolve() async {
-    assert(
-      value is ResourceUnresolved<ResultType>,
-      """The resource has been already resolved, you can't resolve it more than once. Use `refetch()` instead if you want to refresh the value.""",
-    );
-    if (fetcher != null) {
-      // start fetching
-      await _fetch();
-      // react to the [source], if provided.
-      if (source != null) {
-        source!.addListener(refetch);
-        source!.onDispose(() => source!.removeListener(refetch));
-      }
-    }
-    // React the the [stream], if provided
-    if (stream != null) {
-      _listenToStream();
-    }
-  }
-
-  /// Runs the [fetcher] for the first time.
   ///
   /// You may not use this method directly on Flutter apps because the
   /// operation is already performed by `ResourceBuilder`.
-  Future<void> _fetch() async {
-    assert(fetcher != null, 'You are trying to fetch, but fetcher is null');
+  Future<void> resolve() async {
     assert(
-      value is ResourceUnresolved<ResultType>,
-      "Cannot fetch a resource that is already resolved, use 'refetch' instead",
+      value is ResourceUnresolved<T>,
+      """
+      The resource has been already resolved, you can't resolve it more than
+      once. Use `refetch()` instead if you want to refresh the value.
+      """,
     );
-    try {
-      value = ResourceValue<ResultType>.loading();
-      final result = await fetcher!();
-      value = ResourceValue<ResultType>.ready(result);
-    } catch (e, s) {
-      value = ResourceValue<ResultType>.error(e, stackTrace: s);
-    }
-  }
 
-  /// Starts listening to the [stream] provided.
-  void _listenToStream() {
-    value = ResourceValue<ResultType>.loading();
-    _streamSubscription = stream!.listen(
-      (data) {
-        value = ResourceValue<ResultType>.ready(data);
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        value = ResourceValue<ResultType>.error(error, stackTrace: stackTrace);
-      },
-    );
+    if (_resolved == false) {
+      _resolved = true;
+    }
+
+    /// Runs the [fetcher] for the first time.
+    Future<void> fetch() async {
+      try {
+        value = _initialData != null
+            ? ResourceValue.ready(_initialData!.call().unwrap)
+            : ResourceValue<T>.loading();
+        final result = await fetcher();
+        value = ResourceValue<T>.ready(result);
+      } catch (e, s) {
+        value = ResourceValue<T>.error(e, stackTrace: s);
+      }
+    }
+
+    // start fetching
+    await fetch();
+
+    // react to the [source], if provided.
+    if (source != null) {
+      source!.addListener(refetch);
+      source!.onDispose(() => source!.removeListener(refetch));
+    }
   }
 
   /// Force a refresh of the [fetcher].
   Future<void> refetch() async {
-    assert(fetcher != null, 'You are trying to refetch, but fetcher is null');
     try {
-      if (value is ResourceReady<ResultType>) {
+      if (value is ResourceReady<T>) {
         update(
-          (value) =>
-              (value as ResourceReady<ResultType>).copyWith(refreshing: true),
+          (value) => (value as ResourceReady<T>)._copyWith(refreshing: true),
+        );
+      } else if (value is ResourceError<T>) {
+        update(
+          (value) => (value as ResourceError<T>)._copyWith(refreshing: true),
         );
       } else {
-        value = ResourceValue<ResultType>.loading();
+        value = ResourceValue<T>.loading();
       }
-      final result = await fetcher!();
-      value = ResourceValue<ResultType>.ready(result);
+      final result = await fetcher();
+      value = ResourceValue<T>.ready(result);
     } catch (e, s) {
-      value = ResourceValue<ResultType>.error(e, stackTrace: s);
+      value = ResourceValue<T>.error(e, stackTrace: s);
     }
   }
 
-  @override
-  void dispose() {
-    _streamSubscription?.cancel();
-    super.dispose();
-  }
 
   @override
   String toString() =>
-      '''Resource<$ResultType>(value: $value, previousValue: $previousValue, options; $options)''';
+      '''Resource<$T>(value: $value, previousValue: $previousValue, options; $options)''';
 }
 
 /// Manages all the different states of a [Resource]:
-/// - ResourceUnresolved
-/// - ResourceReady
-/// - ResourceLoading
-/// - ResourceError
+/// - [ResourceUnresolved]
+/// - [ResourceReady]
+/// - [ResourceLoading]
+/// - [ResourceError]
 @sealed
 @immutable
 abstract class ResourceValue<T> {
@@ -255,7 +250,8 @@ class ResourceReady<T> implements ResourceValue<T> {
   /// The value currently exposed.
   final T value;
 
-  /// Indicates if the data is being refreshed, defaults to false.
+  /// Indicates if a refresh is occurring while there is cached data,
+  /// defaults to false.
   final bool refreshing;
 
   // coverage:ignore-start
@@ -274,18 +270,21 @@ class ResourceReady<T> implements ResourceValue<T> {
   }
 
   @override
-  bool operator ==(Object other) {
-    return runtimeType == other.runtimeType &&
-        other is ResourceReady<T> &&
-        other.value == value &&
-        other.refreshing == refreshing;
-  }
+  bool operator ==(Object other) =>
+      runtimeType == other.runtimeType &&
+      other is ResourceReady<T> &&
+      other.value == value &&
+      other.refreshing == refreshing;
 
   @override
-  int get hashCode => Object.hash(runtimeType, value, refreshing);
+  int get hashCode => Object.hash(
+        runtimeType,
+        value,
+        refreshing,
+      );
 
   /// Convenience method to update the [refreshing] value of a [Resource]
-  ResourceReady<T> copyWith({
+  ResourceReady<T> _copyWith({
     bool? refreshing,
   }) {
     return ResourceReady(
@@ -322,9 +321,8 @@ class ResourceLoading<T> implements ResourceValue<T> {
   }
 
   @override
-  bool operator ==(Object other) {
-    return runtimeType == other.runtimeType;
-  }
+  bool operator ==(Object other) =>
+      runtimeType == other.runtimeType && other is ResourceLoading<T>;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -342,6 +340,7 @@ class ResourceError<T> implements ResourceValue<T> {
   const ResourceError(
     this.error, {
     this.stackTrace,
+    this.refreshing = false,
   });
 
   /// The error.
@@ -349,6 +348,10 @@ class ResourceError<T> implements ResourceValue<T> {
 
   /// The stackTrace of [error], optional.
   final StackTrace? stackTrace;
+
+  /// Indicates if a refresh is occurring while there is a cached error,
+  /// defaults to false.
+  final bool refreshing;
 
   // coverage:ignore-start
   @override
@@ -366,20 +369,43 @@ class ResourceError<T> implements ResourceValue<T> {
   }
 
   @override
-  bool operator ==(Object other) {
-    return runtimeType == other.runtimeType &&
-        other is ResourceError<T> &&
-        other.error == error &&
-        other.stackTrace == stackTrace;
-  }
+  bool operator ==(Object other) =>
+      runtimeType == other.runtimeType &&
+      other is ResourceError<T> &&
+      other.error == error &&
+      other.stackTrace == stackTrace &&
+      other.refreshing == refreshing;
 
   @override
-  int get hashCode => Object.hash(runtimeType, error, stackTrace);
+  int get hashCode => Object.hash(
+        runtimeType,
+        error,
+        stackTrace,
+        refreshing,
+      );
+
+  /// Convenience method to update the [refreshing] value of a [Resource].
+  ResourceError<T> _copyWith({
+    Object? error,
+    StackTrace? stackTrace,
+    bool? refreshing,
+  }) {
+    return ResourceError(
+      error ?? this.error,
+      stackTrace: stackTrace ?? this.stackTrace,
+      refreshing: refreshing ?? this.refreshing,
+    );
+  }
   // coverage:ignore-end
 }
 
 /// {@template resourceunresolved}
 /// Creates an [ResourceValue] in unresolved state.
+///
+/// Since a [Resource] takes a function that returns a Future as a parameter
+/// (therefore, it is lazy), and [ResourceValue] represents one of the valid
+/// states a Future can be in, this state indicates that the Future has not yet
+/// been awaited.
 /// {@endtemplate}
 @immutable
 class ResourceUnresolved<T> implements ResourceValue<T> {
@@ -443,24 +469,43 @@ extension ResourceExtensions<T> on ResourceValue<T> {
     );
   }
 
-  /// Attempts to synchronously get the value of [ResourceReady].
+  /// Attempts to synchronously get the value of [ResourceReady] in a [Wrapped]
+  /// wrapper, which is used to easily distinguish between loading and ready
+  /// states.
+  ///
+  /// The return value is of type `Wrapped<T>?`:
+  /// - `null` indicates loading
+  /// - `Wrapped<T>` indicates ready
+  ///
+  /// This is preferred over `T?`, as `T?` is not as type-safe: `null` could be
+  /// interpreted as either a valid instance of `T` (in which case `T` must be
+  /// nullable) or as the loading value.
   ///
   /// On error, this will rethrow the error.
-  /// If loading, will return `null`.
-  T? get value {
+  ///
+  /// The get the type `T` from `value`, use `unwrap`:
+  ///
+  /// ```dart
+  /// try {
+  ///   final wrapped = myResourceValue.wrappedValue;
+  ///   if (wrapped == null) {
+  ///     // in loading state
+  ///   } else {
+  ///     // in data state
+  ///   }
+  /// } catch (e) {
+  ///   // in error state
+  /// }
+  /// ```
+  ///
+  Wrapped<T>? get wrappedValue {
     return map(
-      ready: (r) => r.value,
+      ready: (r) => Wrapped(r.value),
       // ignore: only_throw_errors
       error: (r) => throw r.error,
       loading: (_) => null,
     );
   }
-
-  /// Attempts to synchronously get the value of [ResourceReady].
-  ///
-  /// On error, this will rethrow the error.
-  /// If loading, will return `null`.
-  T? call() => value;
 
   /// Attempts to synchronously get the error of [ResourceError].
   ///
@@ -474,7 +519,7 @@ extension ResourceExtensions<T> on ResourceValue<T> {
   }
 
   /// Perform some actions based on the state of the [ResourceValue], or call
-  /// orElse if the current state is not considered.
+  /// [orElse] if the current state is not considered.
   R maybeMap<R>({
     required R Function() orElse,
     R Function(ResourceReady<T> ready)? ready,
@@ -502,12 +547,13 @@ extension ResourceExtensions<T> on ResourceValue<T> {
   /// All cases are required.
   R on<R>({
     required R Function(T data, bool refreshing) ready,
-    required R Function(Object error, StackTrace? stackTrace) error,
+    required R Function(Object error, StackTrace? stackTrace, bool refreshing)
+        error,
     required R Function() loading,
   }) {
     return map(
       ready: (r) => ready(r.value, r.refreshing),
-      error: (e) => error(e.error, e.stackTrace),
+      error: (e) => error(e.error, e.stackTrace, e.refreshing),
       loading: (l) => loading(),
     );
   }
@@ -515,23 +561,23 @@ extension ResourceExtensions<T> on ResourceValue<T> {
   /// Performs an action based on the state of the [ResourceValue], or call
   /// [orElse] if the current state is not considered.
   R maybeOn<R>({
-    required R Function() orElse,
+    required R Function(bool refreshing) orElse,
     R Function(T data, bool refreshing)? ready,
-    R Function(Object error, StackTrace? stackTrace)? error,
+    R Function(Object error, StackTrace? stackTrace, bool refreshing)? error,
     R Function()? loading,
   }) {
     return map(
       ready: (r) {
         if (ready != null) return ready(r.value, r.refreshing);
-        return orElse();
+        return orElse(r.refreshing);
       },
       error: (e) {
-        if (error != null) return error(e.error, e.stackTrace);
-        return orElse();
+        if (error != null) return error(e.error, e.stackTrace, e.refreshing);
+        return orElse(e.refreshing);
       },
       loading: (l) {
         if (loading != null) return loading();
-        return orElse();
+        return orElse(false);
       },
     );
   }
