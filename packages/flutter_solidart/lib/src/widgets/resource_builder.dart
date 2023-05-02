@@ -5,7 +5,7 @@ import 'package:solidart/solidart.dart';
 /// Builder function for a [resource]
 typedef ResourceWidgetBuilder<ResultType> = Widget Function(
   BuildContext context,
-  ResourceValue<ResultType> resource,
+  ResourceValue<ResultType> resourceValue,
 );
 
 /// {@template resourcebuilder}
